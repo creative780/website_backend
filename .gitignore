@@ -1,0 +1,63 @@
+# ----------------------------------------
+# Python
+# ----------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Virtual environments
+venv/
+ENV/
+.venv/
+
+# Environment variables
+.env
+*.env
+
+# ----------------------------------------
+# Django
+# ----------------------------------------
+db.sqlite3
+media/
+uploads/
+staticfiles/
+*.log
+
+# Cache
+*.cache
+*.pot
+*.pyc
+
+# ----------------------------------------
+# Node / Frontend
+# ----------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Build
+.next/
+dist/
+build/
+
+# ----------------------------------------
+# IDE / Editor
+# ----------------------------------------
+.vscode/
+.idea/
+*.swp
+
+# ----------------------------------------
+# OS-specific
+# ----------------------------------------
+.DS_Store
+Thumbs.db
+admin_backend_final/.env

@@ -1,0 +1,22 @@
+[
+{
+  "model": "admin_backend_final.user",
+  "fields": {
+    "password": "pbkdf2_sha256$1000000$Y8NQYFDYvuJPBkT4aqBt4l$ytP3FkW8aFVyUNQe2ZgKyTPLK3O2V0Bmr2fHJpRE2lI=",
+    "last_login": null,
+    "is_superuser": true,
+    "username": "saim1234",
+    "first_name": "",
+    "last_name": "",
+    "is_staff": true,
+    "is_active": true,
+    "date_joined": "2025-08-18T07:33:11.553Z",
+    "email": "saim1234@gmail.com",
+    "password_hash": "",
+    "created_at": "2025-08-18T07:33:12.297Z",
+    "updated_at": "2025-08-18T07:33:12.297Z",
+    "groups": [],
+    "user_permissions": []
+  }
+}
+]
