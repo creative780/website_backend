@@ -2,7 +2,7 @@ import uuid
 from django.db import models 
 from django.contrib.auth.models import AbstractUser 
 from django.conf import settings # for AUTH_USER_MODEL-safe FKs 
-from decimal import Decimal 
+from decimal import Decimal, ROUND_HALF_UP
 from django.utils import timezone 
 from django.utils.text import slugify 
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -71,14 +71,20 @@ class Image(models.Model):
     
     @property
     def url(self):
-        try:
-            return self.image_file.url
-        except ValueError:
+        """
+        Fast and safe: avoid storage calls if file isn't set; handle storages
+        that raise on missing file; never raise out.
+        """
+        f = self.image_file
+        if not f:
             return None
-
-    def __str__(self):
-        return self.image_id
-
+        try:
+            # Some storages only compute .url when file exists
+            return getattr(f, "url", None)
+        except Exception:
+            # Catch broad here: some backends raise non-ValueError on missing keys
+            return None
+        
 class Category(models.Model):
     category_id = models.CharField(primary_key=True, max_length=100)
     name = models.CharField(max_length=100, db_index=True)
@@ -186,22 +192,31 @@ class AttributeSubCategory(models.Model):
         return self.name
 
     def clean(self):
-        # Validate structure
-        if not isinstance(self.values, list):
-            raise ValueError("values must be a list of option objects")
+        """
+        Validate - keep light and linear time.
+        - values must be a list of dicts
+        - at most one is_default = True
+        - if present, name/description must be strings
+        """
+        v = self.values
+        if not isinstance(v, list):
+            raise ValidationError({"values": "values must be a list of option objects."})
 
-        defaults = [v for v in self.values if v.get("is_default")]
-        if len(defaults) > 1:
-            raise ValueError("Only one option can be marked as default.")
+        default_seen = False
+        for idx, item in enumerate(v):
+            if not isinstance(item, dict):
+                raise ValidationError({"values": f"Each value must be an object (index {idx})."})
 
-        # Optional: light schema checks
-        for v in self.values:
-            if not isinstance(v, dict):
-                raise ValueError("Each value must be an object.")
-            if "name" in v and not isinstance(v["name"], str):
-                raise ValueError("Option 'name' must be a string if provided.")
-            if "description" in v and not isinstance(v["description"], str):
-                raise ValueError("Option 'description' must be a string if provided.")
+            if "name" in item and not isinstance(item["name"], str):
+                raise ValidationError({"values": f"Option 'name' must be a string (index {idx})."})
+
+            if "description" in item and not isinstance(item["description"], str):
+                raise ValidationError({"values": f"Option 'description' must be a string (index {idx})."})
+
+            if item.get("is_default"):
+                if default_seen:
+                    raise ValidationError({"values": "Only one option can be marked as default."})
+                default_seen = True
 
     @property
     def is_global(self):
@@ -244,11 +259,27 @@ class Product(models.Model):
         return self.title
 
     def set_rating(self, new_rating):
-        allowed_values = [x * 0.5 for x in range(11)] 
-        if new_rating not in allowed_values:
-            raise ValueError
-        self.rating = new_rating
-        self.save()
+        """
+        Validate rating ∈ {0, 0.5, ..., 5} without building a list.
+        Keeps behavior: set and save.
+        """
+        try:
+            r = Decimal(str(new_rating))
+        except Exception:
+            raise ValueError("Invalid rating type.")
+
+        if r < Decimal("0") or r > Decimal("5"):
+            raise ValueError("Rating must be between 0 and 5.")
+
+        # Half-step check: r * 2 must be an integer
+        if (r * 2) != (r * 2).to_integral_value():
+            raise ValueError("Rating must be in 0.5 steps (0, 0.5, ..., 5).")
+
+        # Normalize to one decimal place to avoid drift like 4.499999
+        r = r.quantize(Decimal("0.0"), rounding=ROUND_HALF_UP)
+
+        self.rating = float(r)
+        self.save(update_fields=["rating"])
 
 class ProductInventory(models.Model):
     inventory_id = models.CharField(primary_key=True, max_length=100)
@@ -404,14 +435,16 @@ class ProductTestimonial(models.Model):
 
     def clean(self):
         """
-        Enforce exactly one target: either product or subcategory, not both, not neither.
+        Enforce exactly one target and rating in half-steps using Decimal math.
         """
         if bool(self.product) == bool(self.subcategory):
             raise ValidationError("Exactly one of product or subcategory must be set.")
 
-        # Enforce half-star steps (0, 0.5, 1, ... 5) as per frontend constraints.
-        allowed = {x * 0.5 for x in range(11)}
-        if float(self.rating) not in allowed:
+        r = Decimal(str(self.rating))
+        if r < Decimal("0") or r > Decimal("5"):
+            raise ValidationError({"rating": "Rating must be between 0 and 5."})
+
+        if (r * 2) != (r * 2).to_integral_value():
             raise ValidationError({"rating": "Rating must be in 0.5 steps between 0 and 5."})
 
     @property
@@ -598,7 +631,11 @@ class BlogPost(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.title)[:255]
-        self.status = self.compute_status()
+
+        new_status = self.compute_status()
+        if self.status != new_status:
+            self.status = new_status
+
         super().save(*args, **kwargs)
 
 class BlogImage(models.Model):
@@ -878,14 +915,15 @@ class Testimonial(models.Model):
     @property
     def avatar_url(self) -> str:
         """
-        Serializer-friendly: prefer managed Image file, fall back to image_url, else empty.
-        Frontend already handles default avatar when this is empty.
+        Prefer internal Image file; fall back to image_url; else empty.
+        Never raises; keeps network/storage calls minimal.
         """
-        try:
-            if self.image and self.image.image_file:
-                return self.image.image_file.url
-        except ValueError:
-            pass
+        img = self.image
+        if img and getattr(img, "image_file", None):
+            try:
+                return getattr(img.image_file, "url", "") or (self.image_url or "")
+            except Exception:
+                return self.image_url or ""
         return self.image_url or ""
 
 class SiteBranding(models.Model):
@@ -931,14 +969,20 @@ class SiteBranding(models.Model):
 
     @property
     def logo_url(self):
+        img = self.logo
+        if not img:
+            return ""
         try:
-            return self.logo.url if self.logo else ""
+            return img.url or ""
         except Exception:
             return ""
 
     @property
     def favicon_url(self):
+        img = self.favicon
+        if not img:
+            return ""
         try:
-            return self.favicon.url if self.favicon else ""
+            return img.url or ""
         except Exception:
             return ""

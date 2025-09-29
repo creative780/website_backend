@@ -13,7 +13,7 @@ from django.utils.text import slugify
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from typing import Optional
 from .models import AttributeSubCategory  # <- model added earlier
 from .permissions import FrontendOnlyPermission
 
@@ -21,7 +21,7 @@ from .permissions import FrontendOnlyPermission
 # ------------------------------
 # Helpers
 # ------------------------------
-def _ensure_unique_slug(base_slug: str) -> str:
+def _ensure_unique_slug(base_slug: Optional[str]) -> str:
     """
     Ensure slug uniqueness across AttributeSubCategory by suffixing -2, -3, ...
     """
