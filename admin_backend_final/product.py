@@ -600,6 +600,46 @@ def save_product_attributes(data, product):
                 order=o_idx,
             )
 
+def save_product_cards(data, product):
+    """
+    Create or update ProductCards for a product.
+
+    Expected payload keys (any optional):
+      - card1_title, card1
+      - card2_title, card2
+      - card3_title, card3
+
+    Optional behavior:
+      - If data['sync_long_description'] is truthy, mirror card2 -> product.long_description.
+        (Keeps legacy clients happy while long_description remains optional.)
+    """
+    now = _now()
+
+    cards, _ = ProductCards.objects.get_or_create(product=product, defaults={"created_at": now})
+
+    # Only update fields that are present; blank is allowed (persisted as "")
+    def _apply(field):
+        if field in data:
+            setattr(cards, field, data.get(field) or "")
+
+    _apply("card1_title")
+    _apply("card1")
+    _apply("card2_title")
+    _apply("card2")
+    _apply("card3_title")
+    _apply("card3")
+
+    cards.updated_at = now
+    cards.save()
+
+    # Optional legacy sync: mirror card2 -> Product.long_description
+    if data.get("sync_long_description"):
+        product.long_description = cards.card2 or ""
+        product.updated_at = now
+        product.save(update_fields=["long_description", "updated_at"])
+
+    return cards
+
 # -----------------------
 # API Views
 # -----------------------
@@ -623,7 +663,7 @@ class SaveProductAPIView(APIView):
                 save_product_subcategories(data, product)
                 save_product_images(data, product)  # DB errors re-raised
                 save_product_attributes(data, product)
-
+                save_product_cards(data, product)
             return Response(
                 {"success": True, "product_id": product.product_id},
                 status=status.HTTP_200_OK
@@ -1099,6 +1139,66 @@ class ShowProductAttributesAPIView(APIView):
 
         return Response(out, status=status.HTTP_200_OK)
 
+class ShowProductCardAPIView(APIView):
+    """
+    Return ProductCards (Card 1/2/3 titles + HTML) for a given product.
+
+    Request (JSON):
+      { "product_id": "PROD-..." }
+
+    Success (200):
+      {
+        "card1_title": "...", "card1": "<p>...</p>",
+        "card2_title": "...", "card2": "<p>...</p>",
+        "card3_title": "...", "card3": "<p>...</p>",
+        "updated_at": "2025-10-01T12:34:56Z"
+      }
+
+    Not found (404):
+      {}
+    """
+    permission_classes = [FrontendOnlyPermission]
+
+    def post(self, request):
+        try:
+            data = _parse_payload(request)
+        except Exception:
+            return Response({"error": "Invalid JSON body"}, status=status.HTTP_400_BAD_REQUEST)
+
+        product_id = data.get("product_id")
+        if not product_id:
+            return Response({"error": "Missing product_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Ensure product exists (keeps 404 parity with other endpoints)
+            product = Product.objects.get(product_id=product_id)
+        except Product.DoesNotExist:
+            return Response({"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.exception("ShowProductCard product lookup failed")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            cards = ProductCards.objects.get(product=product)
+        except ProductCards.DoesNotExist:
+            return Response({}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.exception("ShowProductCard fetch failed")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(
+            {
+                "card1_title": cards.card1_title or "",
+                "card1": cards.card1 or "",
+                "card2_title": cards.card2_title or "",
+                "card2": cards.card2 or "",
+                "card3_title": cards.card3_title or "",
+                "card3": cards.card3 or "",
+                "updated_at": cards.updated_at.isoformat() if cards.updated_at else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 class SetProductThumbnailAPIView(APIView):
     permission_classes = [FrontendOnlyPermission]
 
@@ -1261,7 +1361,7 @@ class EditProductAPIView(APIView):
                 save_product_variants(data, product)
                 save_product_subcategories(data, product)
                 save_product_attributes(data, product)
-
+                save_product_cards(data, product)
                 # Images:
                 # - If replacing and we have new images (legacy flow), keep supporting that.
                 # - Independently, if images_with_meta is provided, upsert metadata and/or add new images from dataUrls.

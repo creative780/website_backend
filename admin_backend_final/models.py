@@ -228,6 +228,7 @@ class Product(models.Model):
     product_id = models.CharField(primary_key=True, max_length=100)
     title = models.CharField(max_length=511, db_index=True)
     description = models.TextField()
+    # DEPRECATED (kept optional for compatibility — FE may still read it):
     long_description = models.TextField(blank=True, default="")
     brand = models.CharField(max_length=255, blank=True, default="")
     price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -244,7 +245,6 @@ class Product(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     order = models.PositiveIntegerField(default=0)
 
-    # New rating system
     rating = models.FloatField(
         default=0.0,
         validators=[MinValueValidator(0.0), MaxValueValidator(5.0)],
@@ -257,7 +257,7 @@ class Product(models.Model):
 
     def __str__(self):
         return self.title
-
+    
     def set_rating(self, new_rating):
         """
         Validate rating ∈ {0, 0.5, ..., 5} without building a list.
@@ -458,6 +458,38 @@ class ProductTestimonial(models.Model):
     def subcategory_id_display(self) -> str:
         try:
             return getattr(self.subcategory, "subcategory_id", "") or ""
+        except Exception:
+            return ""
+        
+class ProductCards(models.Model):
+    """
+    One-to-one container for product detail “cards” used by the FE:
+      - Card 1/2/3 titles
+      - Card 1/2/3 HTML (Quill output)
+    """
+    product = models.OneToOneField(
+        Product, on_delete=models.CASCADE, related_name="cards"
+    )
+
+    card1_title = models.CharField(max_length=255, blank=True, default="")
+    card1 = models.TextField(blank=True, default="")  # HTML
+
+    card2_title = models.CharField(max_length=255, blank=True, default="")
+    card2 = models.TextField(blank=True, default="")  # HTML (FE treats as “longer”)
+
+    card3_title = models.CharField(max_length=255, blank=True, default="")
+    card3 = models.TextField(blank=True, default="")  # HTML
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Cards for {self.product_id_display}"
+
+    @property
+    def product_id_display(self) -> str:
+        try:
+            return getattr(self.product, "product_id", "") or ""
         except Exception:
             return ""
     

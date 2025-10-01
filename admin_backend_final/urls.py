@@ -24,6 +24,7 @@ urlpatterns = [
     path('show_product_shipping_info/', product.ShowProductShippingInfoAPIView.as_view(), name="show_product_shipping_info"),
     path('show_product_other_details/', product.ShowProductOtherDetailsAPIView.as_view(), name="show_product_other_details"),
     path('show_product_variants/', product.ShowVariantCombinationsAPIView.as_view(), name="show_product_variants"),
+    path('show-product-cards/', product.ShowProductCardAPIView.as_view(), name='show_product_cards'),
     path('set-product-thumbnail/', product.SetProductThumbnailAPIView.as_view()),
     path('edit-product/',product.EditProductAPIView.as_view(), name="edit_product"),
     path("update-product-order/", product.UpdateProductOrderAPIView.as_view(), name="update-product-order"),
