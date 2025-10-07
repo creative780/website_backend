@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.utils.text import slugify 
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import ValidationError
-
+from datetime import timedelta
 
 class User(AbstractUser):
     user_id = models.CharField(primary_key=True, max_length=100)
@@ -750,11 +750,67 @@ class Notification(models.Model):
 
 class CallbackRequest(models.Model):
     callback_id = models.CharField(primary_key=True, max_length=100)
-    sender_id = models.CharField(max_length=100)
-    contact_info = models.CharField(max_length=255)
-    message = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
 
+    device_uuid = models.CharField(max_length=100, db_index=True, default="legacy")
+
+    username = models.CharField(max_length=255, db_index=True, default="")
+    email = models.EmailField(blank=True, default="")
+
+    phone_number = models.CharField(max_length=20, db_index=True, default="")
+
+    event_type = models.CharField(max_length=120, db_index=True, default="Other")
+
+    event_venue = models.CharField(max_length=255, blank=True, default="")
+    approx_guest = models.PositiveIntegerField(null=True, blank=True, validators=[MinValueValidator(1)])
+    event_datetime = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    budget = models.CharField(max_length=100, blank=True, default="")
+    preferred_callback = models.DateTimeField(db_index=True, default=timezone.now)
+    theme = models.CharField(max_length=120, blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+
+    STATUS_CHOICES = (
+        ("pending", "Pending"),
+        ("scheduled", "Scheduled"),
+        ("contacted", "Contacted"),
+        ("completed", "Completed"),
+        ("cancelled", "Cancelled"),
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending", db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["device_uuid"]),
+            models.Index(fields=["phone_number"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["preferred_callback"]),
+            models.Index(fields=["event_datetime"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.username} • {self.event_type} • {self.preferred_callback:%Y-%m-%d %H:%M}"
+
+    def clean(self):
+        if self.event_datetime and self.preferred_callback:
+            delta = self.event_datetime - self.preferred_callback
+            if delta < timedelta(days=7):
+                raise ValidationError({
+                    "preferred_callback": "Preferred call-back must be at least 7 days before the event date/time."
+                })
+
+    @staticmethod
+    def new_id() -> str:
+        return f"cb_{uuid.uuid4().hex[:24]}"
+
+    def mark_cancelled(self, save: bool = True):
+        self.status = "cancelled"
+        if save:
+            self.save(update_fields=["status", "updated_at"])
+            
 class HeroBanner(models.Model):
     hero_id = models.CharField(primary_key=True, max_length=100)
     alt_text = models.CharField(max_length=255)

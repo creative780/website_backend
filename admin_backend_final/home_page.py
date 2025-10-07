@@ -3,7 +3,7 @@
 import json
 import uuid
 import traceback
-
+from urllib.parse import urlparse, urlunparse
 # Django REST Framework
 from rest_framework import status
 from rest_framework.response import Response
@@ -247,40 +247,69 @@ class SecondCarouselAPIView(APIView):
             print("❌ POST Error:", traceback.format_exc())
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+def absolutize_media_url(request, path_or_url: str) -> str:
+    """
+    Normalize media URLs:
+    - If host is localhost/127.0.0.1 -> force http (dev server has no TLS)
+    - Otherwise keep https (or whatever request.scheme is in prod)
+    - Works with both relative and absolute inputs
+    """
+    host = request.get_host()
+    is_local = host.startswith("127.0.0.1") or host.startswith("localhost") or host.startswith("[::1]")
+
+    # Already absolute?
+    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        p = urlparse(path_or_url)
+        if p.hostname in ("127.0.0.1", "localhost", "::1"):
+            p = p._replace(scheme="http")
+            return urlunparse(p)
+        return path_or_url
+
+    # Relative path → make it absolute
+    scheme = "http" if is_local else request.scheme
+    path = path_or_url if path_or_url.startswith("/") else f"/{path_or_url}"
+    return f"{scheme}://{host}{path}"
+
 class HeroBannerAPIView(APIView):
     permission_classes = [FrontendOnlyPermission]
-
     def get(self, request):
         try:
             hero = HeroBanner.objects.last()
             if not hero:
                 return Response({
-                    'images': [
+                    "images": [
                         {
-                            "url": f'{request.scheme}://{request.get_host()}/uploads/desktop_default.jpg',
-                            "device_type": "desktop"
+                            "url": absolutize_media_url(request, "/media/uploads/desktop_default.jpg"),
+                            "device_type": "desktop",
                         },
                         {
-                            "url": f'{request.scheme}://{request.get_host()}/uploads/mobile_default.jpg',
-                            "device_type": "mobile"
+                            "url": absolutize_media_url(request, "/media/uploads/mobile_default.jpg"),
+                            "device_type": "mobile",
                         },
                     ]
                 }, status=status.HTTP_200_OK)
 
-            images = hero.images.order_by('order').all()
-            image_urls = [
-                {
-                    "url": request.build_absolute_uri(img.image.image_file.url),
-                    "device_type": img.device_type
-                }
-                for img in images
-            ]
+            images = hero.images.order_by("order").all()
+            image_urls = []
 
-            return Response({'images': image_urls}, status=status.HTTP_200_OK)
+            for hi in images:
+                raw_url = getattr(hi.image.image_file, "url", "")
+                if raw_url and not raw_url.startswith("/"):
+                    if raw_url.startswith("uploads/"):
+                        raw_url = f"/media/{raw_url}"
+                    elif raw_url.startswith("media/"):
+                        raw_url = f"/{raw_url}"
+
+                image_urls.append({
+                    "url": absolutize_media_url(request, raw_url),
+                    "device_type": hi.device_type,
+                })
+
+            return Response({"images": image_urls}, status=status.HTTP_200_OK)
 
         except Exception as e:
             print("❌ HeroBanner GET Error:", traceback.format_exc())
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def post(self, request):
         try:
