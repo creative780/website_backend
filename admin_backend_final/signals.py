@@ -1,12 +1,16 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.utils.timezone import now
-from .models import Admin, AdminRole, AdminRoleMap, Notification, DashboardSnapshot, SiteSettings
+from django.db import models
+from decimal import Decimal
+from uuid import UUID
+from .models import Admin, Notification, DashboardSnapshot, SiteSettings, RecentlyDeletedItem
 import uuid
 from django.contrib.auth.signals import user_logged_in
 from .models import Product, Orders, BlogPost, Category, SubCategory, ProductTestimonial
 from django.contrib.auth.signals import user_logged_out
-
+from django.apps import apps
+from django.db.models.fields.files import FieldFile
 
 def create_admin_notification(message, source_table, source_id):
     Notification.objects.create(
@@ -185,3 +189,106 @@ def notify_testimonial_created(sender, instance, created, **kwargs):
         status="unread",
         created_at=now(),
     )
+    
+# Dependency map for cascade deletion logging
+DEPENDENCIES = {
+    "Product": [
+        "ProductImage", "ProductSEO", "ProductTestimonial", "ProductCards",
+        "ProductInventory", "ProductVariant", "ShippingInfo", "Attribute"
+    ],
+    "Category": ["CategoryImage", "CategorySubCategoryMap"],
+    "SubCategory": ["SubCategoryImage", "ProductSubCategoryMap", "CategorySubCategoryMap"],
+    "BlogPost": ["BlogImage", "BlogComment"],
+    "Orders": ["OrderItem", "OrderDelivery"],
+}
+
+def _to_jsonable(value):
+    # primitives pass-through
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    # Decimal → str
+    if isinstance(value, Decimal):
+        return str(value)
+    # UUID → str
+    if isinstance(value, UUID):
+        return str(value)
+    # datetime/date/time → ISO 8601
+    from datetime import date, datetime, time
+    if isinstance(value, (datetime, date, time)):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    # File/ImageField → file name or empty
+    if isinstance(value, FieldFile):
+        try:
+            return value.name or ""
+        except Exception:
+            return ""
+    # Fallback: string repr
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+def serialize_instance_for_trash(instance):
+    """
+    Return a dict with only JSON-safe primitives.
+    FK fields stored as raw id via field.attname (e.g., category_id).
+    """
+    data = {}
+    for field in instance._meta.concrete_fields:
+        try:
+            if isinstance(field, models.ForeignKey):
+                raw_fk = getattr(instance, field.attname, None)
+                data[field.attname] = _to_jsonable(raw_fk)
+            else:
+                val = getattr(instance, field.name, None)
+                data[field.name] = _to_jsonable(val)
+        except Exception:
+            data[field.name] = None
+    return data
+
+def capture_deleted_instance(model_name, instance, parent=None, reason="Deleted via ORM"):
+    """
+    Log a deleted row into RecentlyDeletedItem with JSON-safe payload.
+    This function must NEVER raise.
+    """
+    try:
+        record_data = serialize_instance_for_trash(instance)
+        entry = RecentlyDeletedItem.objects.create(
+            table_name=model_name,
+            record_id=str(getattr(instance, instance._meta.pk.name)),
+            record_data=record_data,
+            deleted_at=now(),
+            deleted_by=getattr(instance, "created_by", ""),
+            deleted_reason=reason,
+            parent=parent,
+        )
+        return entry
+    except Exception as e:
+        # Fallback to ensure we don't break deletes
+        try:
+            RecentlyDeletedItem.objects.create(
+                table_name=model_name,
+                record_id=str(getattr(instance, instance._meta.pk.name)),
+                record_data={"pk": str(getattr(instance, instance._meta.pk.name)), "repr": str(instance)},
+                deleted_at=now(),
+                deleted_by="",
+                deleted_reason=f"{reason} (fallback due to serialization error: {e})",
+                parent=parent,
+            )
+        except Exception:
+            pass
+        return None
+
+@receiver(post_delete)
+def log_any_deletion(sender, instance, **kwargs):
+    """
+    Global catcher: log every model’s deletion (except our own log table).
+    NOTE: This only fires for ORM deletes (model.delete(), queryset.delete()).
+    """
+    model_name = sender.__name__
+    if model_name in {"RecentlyDeletedItem"}:
+        return
+    capture_deleted_instance(model_name, instance, parent=None, reason=f"{model_name} deleted")

@@ -1074,3 +1074,67 @@ class SiteBranding(models.Model):
             return img.url or ""
         except Exception:
             return ""
+        
+class RecentlyDeletedItem(models.Model):
+    """
+    Universal trash bin for soft-deleted entities.
+    Captures dependency-aware relationships for cascading restore/permanent-delete operations.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Entity metadata
+    table_name = models.CharField(max_length=100, db_index=True)  # e.g., "Product"
+    record_id = models.CharField(max_length=100, db_index=True)   # e.g., product_id
+
+    # Backup of the deleted data (for recovery)
+    record_data = models.JSONField()
+
+    # Soft-delete tracking
+    deleted_at = models.DateTimeField(default=timezone.now)
+    deleted_by = models.CharField(max_length=100, blank=True, default="")
+    deleted_reason = models.TextField(blank=True, default="")
+
+    # Status handling
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("VISIBLE", "Visible"),
+            ("HIDE", "Hidden"),
+            ("UNHIDE", "Unhidden"),
+            ("PERMANENT", "Permanently Deleted")
+        ],
+        default="VISIBLE",
+        db_index=True
+    )
+
+    # Self-reference for cascading hierarchy (e.g., Product → ProductImage)
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="children"
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["table_name", "record_id"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["deleted_at"]),
+        ]
+
+    def __str__(self):
+        return f"[{self.table_name}] {self.record_id} (status={self.status})"
+
+    def is_root(self):
+        return self.parent_id is None
+
+    def cascade_status(self, new_status: str):
+        """
+        Apply status to self and all children recursively.
+        """
+        self.status = new_status
+        self.save(update_fields=["status"])
+
+        for child in self.children.all():
+            child.cascade_status(new_status)

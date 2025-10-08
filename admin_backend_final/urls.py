@@ -1,5 +1,5 @@
 from django.urls import path
-from  . import views, utilities, category, order_cart, product, home_page, blog, testimonials, attribute, site_details, callback
+from  . import views, utilities, category, order_cart, product, home_page, blog, testimonials, attribute, site_details, callback, deleted
 from . import chat
 urlpatterns = [
     path('save-image/', utilities.SaveImageAPIView.as_view(), name='save_image'),
@@ -90,4 +90,8 @@ urlpatterns = [
     path("delete-callback/", callback.DeleteCallbackAPIView.as_view(), name="delete-callback"),
     path("show-specific-callback/", callback.ShowSpecificCallbackAPIView.as_view(), name="show-specific-callback"),
     path("show-all-callback/", callback.ShowAllCallbackAPIView.as_view(), name="show-all-callback"),
+    path("show-deleted-items/", deleted.show_deleted_items, name="show_deleted_items"),
+    path("recover-item/", deleted.recover_item, name="recover_item"),
+    path("restore-item/", deleted.RestoreItemsAPIView.as_view(), name="restore_item"),
+    path("permanently-item/", deleted.permanently_delete_item, name="permanently_item"),
 ]
